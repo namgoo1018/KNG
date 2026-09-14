@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="내가 학습한 이미지 분류 AI를 웹캠과 사진으로 시험합니다.">
-  <title>나만의 이미지 분류 AI</title>
+  <meta name="description" content="내가 학습한 포즈 분류 AI를 웹캠과 사진으로 시험합니다.">
+  <title>나만의 포즈 분류 AI</title>
   <style>
     :root { color-scheme: light; --blue: #174bc8; --ink: #18233b; --muted: #58657a; }
     * { box-sizing: border-box; }
@@ -61,16 +61,16 @@
     model/metadata.json
     model/weights.bin (다운로드한 가중치 파일 이름 그대로)
 
-    TensorFlow.js 형식으로 내보낸 '이미지' 모델을 사용하세요.
+    TensorFlow.js 형식으로 내보낸 '포즈' 모델을 사용하세요.
     ZIP을 풀어 model 폴더에 넣고 GitHub Pages에서 실행하세요.
     외부 라이브러리를 불러오므로 인터넷 연결이 필요합니다.
     모델을 다시 학습한 경우 모델 파일 전체를 함께 교체하세요.
-    API 참고: https://github.com/googlecreativelab/teachablemachine-community/tree/master/libraries/image
+    API 참고: https://github.com/googlecreativelab/teachablemachine-community/tree/master/libraries/pose
   -->
   <main>
     <header>
-      <h1 id="page-title">나만의 이미지 분류 AI</h1>
-      <p>웹캠으로 보여주거나 사진을 올려, 내가 학습한 AI의 판단을 확인하세요.</p>
+      <h1 id="page-title">나만의 포즈 분류 AI</h1>
+      <p>웹캠으로 자세를 보여주거나 사진을 올려, 내가 학습한 AI의 판단을 확인하세요.</p>
     </header>
 
     <div class="controls" aria-label="이미지 입력 방법">
@@ -118,7 +118,7 @@
       "use strict";
       // GitHub에서는 model 폴더에 모델 파일을 넣습니다.
       // 로컬 파일로 열 때는 '모델 파일 연결'에서 압축을 푼 파일 3개를 선택하세요.
-      const PAGE_TITLE = "나만의 이미지 분류 AI";
+      const PAGE_TITLE = "나만의 포즈 분류 AI";
       const MODEL_BASE = "./model/";
       const MIRROR_CAMERA = true;
       const $ = (id) => document.getElementById(id);
@@ -264,11 +264,11 @@
         });
       }
       async function ensureLibraries() {
-        if (window.tf && window.tmImage) return;
+        if (window.tf && window.tmPose) return;
         if (!libraryPromise) libraryPromise = (async () => {
           for (const [globalName, file] of [
             ["tf", "@tensorflow/tfjs@1.3.1/dist/tf.min.js"],
-            ["tmImage", "@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"]
+            ["tmPose", "@teachablemachine/pose@0.8.6/dist/teachablemachine-pose.min.js"]
           ]) {
             if (window[globalName]) continue;
             try { await loadScript("https://cdn.jsdelivr.net/npm/" + file); }
@@ -323,18 +323,22 @@
           await ensureLibraries();
           if (task !== modelTask) return;
           if (files) {
-            candidate = await tmImage.loadFromFiles(topology, weights[0], metadata);
+            const metadataJson = JSON.parse(await metadata.text());
+            if (metadataJson.packageName && metadataJson.packageName !== "@teachablemachine/pose") {
+              throw new Error("이 페이지에는 Teachable Machine의 '포즈' 모델이 필요합니다. 포즈 프로젝트에서 내보낸 파일을 선택해주세요.");
+            }
+            candidate = await tmPose.loadFromFiles(topology, weights[0], metadata);
           } else {
             // model 폴더를 먼저 찾고, 파일을 HTML 옆에 둔 경우도 지원합니다.
             for (const base of [...new Set([MODEL_BASE, "./"])]) {
-              try { candidate = await tmImage.load(base + "model.json", base + "metadata.json"); break; }
+              try { candidate = await tmPose.load(base + "model.json", base + "metadata.json"); break; }
               catch (error) { console.warn("모델 경로 확인:", base, error); }
             }
             if (!candidate) throw new Error("학습 모델을 찾지 못했습니다. '모델 파일 연결'로 파일 3개를 선택하거나 GitHub의 model 폴더에 파일이 모두 있는지 확인해주세요.");
           }
           if (task !== modelTask) { dispose(candidate); return; }
           const labels = candidate.getClassLabels();
-          if (!Array.isArray(labels) || !labels.length) throw new Error("분류 이름이 없는 모델입니다. TensorFlow.js 이미지 모델을 다시 내보내주세요.");
+          if (!Array.isArray(labels) || !labels.length) throw new Error("분류 이름이 없는 모델입니다. TensorFlow.js 포즈 모델을 다시 내보내주세요.");
           model = candidate;
           makeRows(labels);
           modelLoading = false;
@@ -372,7 +376,11 @@
           ? video.readyState >= 2 && crop(video, video.videoWidth, video.videoHeight, MIRROR_CAMERA, inputCtx)
           : mode === "photo" && photo && crop(photo, photo.naturalWidth, photo.naturalHeight, false, inputCtx);
         if (!ready) return;
-        const job = Promise.resolve().then(() => activeModel.predict(inputCanvas));
+        // 포즈 모델은 이미지 픽셀을 분류기에 바로 넣지 않습니다.
+        // 먼저 PoseNet 특징을 추출한 뒤 그 결과를 Dense 분류기에 전달해야 합니다.
+        const job = Promise.resolve()
+          .then(() => activeModel.estimatePose(inputCanvas))
+          .then(({ posenetOutput }) => activeModel.predict(posenetOutput));
         inference = job;
         try {
           const predictions = await job;
